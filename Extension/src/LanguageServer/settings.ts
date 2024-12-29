@@ -131,6 +131,7 @@ export interface WorkspaceFolderSettingsParams {
     filesExclude: Excludes;
     filesAutoSaveAfterDelay: boolean;
     filesEncoding: string;
+    filesEncodingChanged: boolean;
     searchExclude: Excludes;
     editorAutoClosingBrackets: string;
     editorInlayHintsEnabled: boolean;
@@ -141,6 +142,7 @@ export interface WorkspaceFolderSettingsParams {
 export interface SettingsParams {
     filesAssociations: Associations;
     workspaceFallbackEncoding: string;
+    workspaceFallbackEncodingChanged: boolean;
     maxConcurrentThreads: number | null;
     maxCachedProcesses: number | null;
     maxMemory: number | null;
@@ -161,6 +163,7 @@ export interface SettingsParams {
     codeAnalysisMaxMemory: number | null;
     codeAnalysisUpdateDelay: number;
     workspaceFolderSettings: WorkspaceFolderSettingsParams[];
+    copilotHover: string;
 }
 
 function getTarget(): vscode.ConfigurationTarget {
@@ -277,7 +280,6 @@ export class CppSettings extends Settings {
             if (cachedClangPath !== undefined) {
                 return cachedClangPath;
             }
-            const clangStr: string = isFormat ? this.clangFormatStr : this.clangTidyStr;
             const clangName: string = isFormat ? this.clangFormatName : this.clangTidyName;
             const setCachedClangPath: (path: string) => void = isFormat ? setCachedClangFormatPath : setCachedClangTidyPath;
             const whichPath: string | null = which.sync(clangName, { nothrow: true });
@@ -290,20 +292,14 @@ export class CppSettings extends Settings {
                 return undefined;
             } else {
                 // Attempt to invoke both our own version of clang-* to see if we can successfully execute it, and to get its version.
-                let clangVersion: string;
+                let bundledVersion: string;
                 try {
-                    const exePath: string = getExtensionFilePath(`./LLVM/bin/${clangName}`);
-                    const output: string[] = execSync(quote([exePath, '--version'])).toString().split(" ");
-                    if (output.length < 3 || output[0] !== clangStr || output[1] !== "version" || !semver.valid(output[2])) {
-                        if (output.length === 3) {
-                            return path;
-                        }
-                        const versionIndex: number = output.findIndex((value: string) => value === "version");
-                        if (versionIndex < 0 || versionIndex + 1 >= output.length || !semver.valid(output[versionIndex + 1].trim())) {
-                            return path;
-                        }
+                    const bundledPath: string = getExtensionFilePath(`./LLVM/bin/${clangName}`);
+                    const output: string = execSync(quote([bundledPath, '--version'])).toString();
+                    bundledVersion = output.match(/(\d+\.\d+\.\d+)/)?.[1] ?? "";
+                    if (!semver.valid(bundledVersion)) {
+                        return path;
                     }
-                    clangVersion = output[2];
                 } catch (e) {
                     // Unable to invoke our own clang-*.  Use the system installed clang-*.
                     return path;
@@ -311,8 +307,9 @@ export class CppSettings extends Settings {
 
                 // Invoke the version on the system to compare versions.  Use ours if it's more recent.
                 try {
-                    const output: string[] = execSync(`"${path}" --version`).toString().split(" ");
-                    if (output.length < 3 || output[0] !== clangStr || output[1] !== "version" || semver.ltr(output[2], clangVersion)) {
+                    const output: string = execSync(`"${path}" --version`).toString();
+                    const userVersion = output.match(/(\d+\.\d+\.\d+)/)?.[1] ?? "";
+                    if (semver.ltr(userVersion, bundledVersion)) {
                         path = "";
                         setCachedClangPath(path);
                     }
@@ -460,6 +457,17 @@ export class CppSettings extends Settings {
             && this.intelliSenseEngine.toLowerCase() === "default"
             && vscode.workspace.getConfiguration("workbench").get<any>("colorTheme") !== "Default High Contrast";
     }
+    public get copilotHover(): string {
+        if (!(vscode as any).lm) {
+            return "disabled";
+        }
+        const val = super.Section.get<any>("copilotHover");
+        if (val === undefined) {
+            return "default";
+        }
+        return val as string;
+    }
+
     public get formattingEngine(): string { return this.getAsString("formatting"); }
     public get vcFormatIndentBraces(): boolean { return this.getAsBoolean("vcFormat.indent.braces"); }
     public get vcFormatIndentMultiLineRelativeTo(): string { return this.getAsString("vcFormat.indent.multiLineRelativeTo"); }
